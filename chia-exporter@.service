@@ -8,9 +8,7 @@ Description=Chia Metrics Prometheus Exporter
 
 [Service]
 User=%i
-ExecStart=/usr/bin/chia_exporter \
-        -cert /home/%i/.chia/mainnet/config/ssl/full_node/private_full_node.crt \
-        -key /home/%i/.chia/mainnet/config/ssl/full_node/private_full_node.key
+ExecStart=/usr/bin/chia_exporter_nforks
 Restart=on-failure
 
 [Install]

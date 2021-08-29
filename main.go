@@ -27,60 +27,112 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"gopkg.in/yaml.v2"
 )
 
 var (
-	addr      = flag.String("listen", ":9133", "The address to listen on for HTTP requests.")
-	cert      = flag.String("cert", "$HOME/.chia/mainnet/config/ssl/full_node/private_full_node.crt", "The full node SSL certificate.")
-	key       = flag.String("key", "$HOME/.chia/mainnet/config/ssl/full_node/private_full_node.key", "The full node SSL key.")
-	url       = flag.String("url", "https://localhost:8555", "The base URL for the full node RPC endpoint.")
-	wallet    = flag.String("wallet", "https://localhost:9256", "The base URL for the wallet RPC endpoint.")
-	farmer    = flag.String("farmer", "https://localhost:8559", "The base URL for the farmer RPC endpoint.")
-	harvester = flag.String("harvester", "https://localhost:8560", "The base URL for the harvester RPC endpoint.")
+	config = flag.String("config", "config.yaml", "Config file dir")
 )
 
 var (
-	Version = "0.5.1"
+	Version = "1.0.0"
+)
+
+const (
+	IsConn          = "conn"
+	IsState         = "state"
+	IsWalletSync    = "wallet-sync"
+	IsWalletBalance = "wallet-balance"
+	IsFarmed        = "farmed-amount"
+	IsPlots         = "plots"
+	IsPool          = "pool"
+)
+
+// yaml config struct representation
+type (
+	Config struct {
+		Port  string          `yaml:"port"`
+		Coins map[string]Coin `yaml:"coins"`
+	}
+	Coin struct {
+		Cert          string          `yaml:"cert"`
+		Key           string          `yaml:"key"`
+		Host          string          `yaml:"host"`
+		FullNodePort  string          `yaml:"full-node-port"`
+		WalletPort    string          `yaml:"wallet-port"`
+		FarmerPort    string          `yaml:"farmer-port"`
+		HarvesterPort string          `yaml:"harvester-port"`
+		PullSwitcher  map[string]bool `yaml:"pull-switcher"`
+	}
 )
 
 func main() {
-	log.Printf("chia_exporter version %s", Version)
+	log.Printf("chia_exporter_nforks version %s", Version)
 	flag.Parse()
 
-	client, err := newClient(os.ExpandEnv(*cert), os.ExpandEnv(*key))
+	f, err := os.Open(*config)
 	if err != nil {
 		log.Fatal(err)
 	}
-	var info NetworkInfo
-	if err := queryAPI(client, *url, "get_network_info", "", &info); err != nil {
-		log.Print(err)
-	} else {
-		log.Printf("Connected to node at %s on %s", *url, info.NetworkName)
+	defer f.Close()
+	cfgSrc, err := ioutil.ReadAll(f)
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	cc := ChiaCollector{
-		client:       client,
-		baseURL:      *url,
-		walletURL:    *wallet,
-		farmerURL:    *farmer,
-		harvesterURL: *harvester,
+	config := Config{}
+	err = yaml.Unmarshal(cfgSrc, &config)
+	if err != nil {
+		log.Fatal(err)
 	}
-	prometheus.MustRegister(cc)
+
+	collectors := CoinsCollector{
+		Collectors: make(map[string]Collector),
+	}
+
+	for name, coin := range config.Coins {
+		coll := Collector{
+			name:         name,
+			baseURL:      fmt.Sprintf("%s:%s", coin.Host, coin.FullNodePort),
+			walletURL:    fmt.Sprintf("%s:%s", coin.Host, coin.WalletPort),
+			farmerURL:    fmt.Sprintf("%s:%s", coin.Host, coin.FarmerPort),
+			harvesterURL: fmt.Sprintf("%s:%s", coin.Host, coin.HarvesterPort),
+			pullSwitcher: coin.PullSwitcher,
+		}
+
+		client, err := newClient(os.ExpandEnv(coin.Cert), os.ExpandEnv(coin.Key))
+		if err != nil {
+			log.Fatal(name, err)
+		}
+		var info NetworkInfo
+		if err := queryAPI(client, coll.baseURL, "get_network_info", "", &info); err != nil {
+			log.Print(name, err)
+		} else {
+			log.Printf(name, "Connected to node at %s on %s", coll.baseURL, info.NetworkName)
+		}
+
+		coll.client = client
+		collectors.Collectors[name] = coll
+	}
+
+	prometheus.MustRegister(collectors)
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, "chia_exporter version %s\n", Version)
+		fmt.Fprintf(w, "chia_exporter_nforks version %s\n", Version)
 		fmt.Fprintf(w, "metrics are published on /metrics\n\n")
 		fmt.Fprintf(w, "This program is free software released under the GNU AGPL.\n")
-		fmt.Fprintf(w, "The source code is availabe at https://github.com/retzkek/chia_exporter\n")
+		fmt.Fprintf(w, "The source code is availabe at https://github.com/gusaul/chia_exporter_nforks\n")
 	})
 	http.Handle("/metrics", promhttp.Handler())
 
-	log.Printf("Listening on %s. Serving metrics on /metrics.", *addr)
-	log.Fatal(http.ListenAndServe(*addr, nil))
+	addr := fmt.Sprintf(":%s", config.Port)
+	log.Printf("Listening on %s. Serving metrics on /metrics.", addr)
+	log.Fatal(http.ListenAndServe(addr, nil))
 }
 
 func newClient(cert, key string) (*http.Client, error) {
@@ -128,29 +180,69 @@ func queryAPI(client *http.Client, base, endpoint, query string, result interfac
 	return nil
 }
 
-type ChiaCollector struct {
+type CoinsCollector struct {
+	Collectors map[string]Collector
+}
+
+type Collector struct {
+	name         string
 	client       *http.Client
 	baseURL      string
 	walletURL    string
 	farmerURL    string
 	harvesterURL string
+	pullSwitcher map[string]bool
 }
 
 // Describe is implemented with DescribeByCollect.
-func (cc ChiaCollector) Describe(ch chan<- *prometheus.Desc) {
+func (cc CoinsCollector) Describe(ch chan<- *prometheus.Desc) {
 	prometheus.DescribeByCollect(cc, ch)
 }
 
 // Collect queries Chia and returns metrics on ch.
-func (cc ChiaCollector) Collect(ch chan<- prometheus.Metric) {
-	cc.collectConnections(ch)
-	cc.collectBlockchainState(ch)
-	cc.collectWallets(ch)
-	cc.collectPoolState(ch)
-	cc.collectPlots(ch)
+func (cc CoinsCollector) Collect(ch chan<- prometheus.Metric) {
+	var wg sync.WaitGroup
+	for _, coll := range cc.Collectors {
+		currColl := coll
+
+		wg.Add(1)
+		go func() {
+			currColl.collectConnections(ch)
+			wg.Done()
+		}()
+
+		wg.Add(1)
+		go func() {
+			currColl.collectBlockchainState(ch)
+			wg.Done()
+		}()
+
+		wg.Add(1)
+		go func() {
+			currColl.collectWallets(ch)
+			wg.Done()
+		}()
+
+		wg.Add(1)
+		go func() {
+			currColl.collectPoolState(ch)
+			wg.Done()
+		}()
+
+		wg.Add(1)
+		go func() {
+			currColl.collectPlots(ch)
+			wg.Done()
+		}()
+	}
+	wg.Wait()
 }
 
-func (cc ChiaCollector) collectConnections(ch chan<- prometheus.Metric) {
+func (cc Collector) collectConnections(ch chan<- prometheus.Metric) {
+	if !cc.pullSwitcher[IsConn] {
+		return
+	}
+
 	var conns Connections
 	if err := queryAPI(cc.client, cc.baseURL, "get_connections", "", &conns); err != nil {
 		log.Print(err)
@@ -161,7 +253,7 @@ func (cc ChiaCollector) collectConnections(ch chan<- prometheus.Metric) {
 		peers[p.Type-1]++
 	}
 	desc := prometheus.NewDesc(
-		"chia_peers_count",
+		fmt.Sprintf("%s_peers_count", cc.name),
 		"Number of peers currently connected.",
 		[]string{"type"}, nil,
 	)
@@ -175,7 +267,11 @@ func (cc ChiaCollector) collectConnections(ch chan<- prometheus.Metric) {
 	}
 }
 
-func (cc ChiaCollector) collectBlockchainState(ch chan<- prometheus.Metric) {
+func (cc Collector) collectBlockchainState(ch chan<- prometheus.Metric) {
+	if !cc.pullSwitcher[IsState] {
+		return
+	}
+
 	var bs BlockchainState
 	if err := queryAPI(cc.client, cc.baseURL, "get_blockchain_state", "", &bs); err != nil {
 		log.Print(err)
@@ -189,7 +285,7 @@ func (cc ChiaCollector) collectBlockchainState(ch chan<- prometheus.Metric) {
 	}
 	ch <- prometheus.MustNewConstMetric(
 		prometheus.NewDesc(
-			"chia_blockchain_sync_status",
+			fmt.Sprintf("%s_blockchain_sync_status", cc.name),
 			"Sync status, 0=not synced, 1=syncing, 2=synced",
 			nil, nil,
 		),
@@ -198,7 +294,7 @@ func (cc ChiaCollector) collectBlockchainState(ch chan<- prometheus.Metric) {
 	)
 	ch <- prometheus.MustNewConstMetric(
 		prometheus.NewDesc(
-			"chia_blockchain_height",
+			fmt.Sprintf("%s_blockchain_height", cc.name),
 			"Current height",
 			nil, nil,
 		),
@@ -207,7 +303,7 @@ func (cc ChiaCollector) collectBlockchainState(ch chan<- prometheus.Metric) {
 	)
 	ch <- prometheus.MustNewConstMetric(
 		prometheus.NewDesc(
-			"chia_blockchain_difficulty",
+			fmt.Sprintf("%s_blockchain_difficulty", cc.name),
 			"Current difficulty",
 			nil, nil,
 		),
@@ -216,7 +312,7 @@ func (cc ChiaCollector) collectBlockchainState(ch chan<- prometheus.Metric) {
 	)
 	ch <- prometheus.MustNewConstMetric(
 		prometheus.NewDesc(
-			"chia_blockchain_space_bytes",
+			fmt.Sprintf("%s_blockchain_space_bytes", cc.name),
 			"Estimated current netspace",
 			nil, nil,
 		),
@@ -225,7 +321,7 @@ func (cc ChiaCollector) collectBlockchainState(ch chan<- prometheus.Metric) {
 	)
 	ch <- prometheus.MustNewConstMetric(
 		prometheus.NewDesc(
-			"chia_blockchain_total_iters",
+			fmt.Sprintf("%s_blockchain_total_iters", cc.name),
 			"Current total iterations",
 			nil, nil,
 		),
@@ -234,7 +330,11 @@ func (cc ChiaCollector) collectBlockchainState(ch chan<- prometheus.Metric) {
 	)
 }
 
-func (cc ChiaCollector) collectWallets(ch chan<- prometheus.Metric) {
+func (cc Collector) collectWallets(ch chan<- prometheus.Metric) {
+	if !cc.pullSwitcher[IsWalletBalance] && !cc.pullSwitcher[IsWalletSync] && !cc.pullSwitcher[IsFarmed] {
+		return
+	}
+
 	var ws Wallets
 	if err := queryAPI(cc.client, cc.walletURL, "get_wallets", "", &ws); err != nil {
 		log.Print(err)
@@ -243,15 +343,21 @@ func (cc ChiaCollector) collectWallets(ch chan<- prometheus.Metric) {
 	for _, w := range ws.Wallets {
 		w.StringID = strconv.Itoa(w.ID)
 		w.PublicKey = cc.getWalletPublicKey(w)
-		cc.collectWalletBalance(ch, w)
-		cc.collectWalletSync(ch, w)
-		cc.collectFarmedAmount(ch, w)
+		if cc.pullSwitcher[IsWalletBalance] {
+			cc.collectWalletBalance(ch, w)
+		}
+		if cc.pullSwitcher[IsWalletSync] {
+			cc.collectWalletSync(ch, w)
+		}
+		if cc.pullSwitcher[IsFarmed] {
+			cc.collectFarmedAmount(ch, w)
+		}
 	}
 }
 
 // getWalletPublicKey returns the fingerprint of first public key associated
 // with the wallet.
-func (cc ChiaCollector) getWalletPublicKey(w Wallet) string {
+func (cc Collector) getWalletPublicKey(w Wallet) string {
 	var wpks WalletPublicKeys
 	q := fmt.Sprintf(`{"wallet_id":%d}`, w.ID)
 	if err := queryAPI(cc.client, cc.walletURL, "get_public_keys", q, &wpks); err != nil {
@@ -269,34 +375,44 @@ func (cc ChiaCollector) getWalletPublicKey(w Wallet) string {
 }
 
 var (
-	confirmedBalanceDesc = prometheus.NewDesc(
-		"chia_wallet_confirmed_balance_mojo",
-		"Confirmed wallet balance.",
-		[]string{"wallet_id", "wallet_fingerprint"}, nil,
-	)
-	unconfirmedBalanceDesc = prometheus.NewDesc(
-		"chia_wallet_unconfirmed_balance_mojo",
-		"Unconfirmed wallet balance.",
-		[]string{"wallet_id", "wallet_fingerprint"}, nil,
-	)
-	spendableBalanceDesc = prometheus.NewDesc(
-		"chia_wallet_spendable_balance_mojo",
-		"Spendable wallet balance.",
-		[]string{"wallet_id", "wallet_fingerprint"}, nil,
-	)
-	maxSendDesc = prometheus.NewDesc(
-		"chia_wallet_max_send_mojo",
-		"Maximum sendable amount.",
-		[]string{"wallet_id", "wallet_fingerprint"}, nil,
-	)
-	pendingChangeDesc = prometheus.NewDesc(
-		"chia_wallet_pending_change_mojo",
-		"Pending change amount.",
-		[]string{"wallet_id", "wallet_fingerprint"}, nil,
-	)
+	confirmedBalanceDesc = func(name string) *prometheus.Desc {
+		return prometheus.NewDesc(
+			fmt.Sprintf("%s_wallet_confirmed_balance_mojo", name),
+			"Confirmed wallet balance.",
+			[]string{"wallet_id", "wallet_fingerprint"}, nil,
+		)
+	}
+	unconfirmedBalanceDesc = func(name string) *prometheus.Desc {
+		return prometheus.NewDesc(
+			fmt.Sprintf("%s_wallet_unconfirmed_balance_mojo", name),
+			"Unconfirmed wallet balance.",
+			[]string{"wallet_id", "wallet_fingerprint"}, nil,
+		)
+	}
+	spendableBalanceDesc = func(name string) *prometheus.Desc {
+		return prometheus.NewDesc(
+			fmt.Sprintf("%s_wallet_spendable_balance_mojo", name),
+			"Spendable wallet balance.",
+			[]string{"wallet_id", "wallet_fingerprint"}, nil,
+		)
+	}
+	maxSendDesc = func(name string) *prometheus.Desc {
+		return prometheus.NewDesc(
+			fmt.Sprintf("%s_wallet_max_send_mojo", name),
+			"Maximum sendable amount.",
+			[]string{"wallet_id", "wallet_fingerprint"}, nil,
+		)
+	}
+	pendingChangeDesc = func(name string) *prometheus.Desc {
+		return prometheus.NewDesc(
+			fmt.Sprintf("%s_wallet_pending_change_mojo", name),
+			"Pending change amount.",
+			[]string{"wallet_id", "wallet_fingerprint"}, nil,
+		)
+	}
 )
 
-func (cc ChiaCollector) collectWalletBalance(ch chan<- prometheus.Metric, w Wallet) {
+func (cc Collector) collectWalletBalance(ch chan<- prometheus.Metric, w Wallet) {
 	var wb WalletBalance
 	q := fmt.Sprintf(`{"wallet_id":%d}`, w.ID)
 	if err := queryAPI(cc.client, cc.walletURL, "get_wallet_balance", q, &wb); err != nil {
@@ -304,31 +420,31 @@ func (cc ChiaCollector) collectWalletBalance(ch chan<- prometheus.Metric, w Wall
 		return
 	}
 	ch <- prometheus.MustNewConstMetric(
-		confirmedBalanceDesc,
+		confirmedBalanceDesc(cc.name),
 		prometheus.GaugeValue,
 		float64(wb.WalletBalance.ConfirmedBalance),
 		w.StringID, w.PublicKey,
 	)
 	ch <- prometheus.MustNewConstMetric(
-		unconfirmedBalanceDesc,
+		unconfirmedBalanceDesc(cc.name),
 		prometheus.GaugeValue,
 		float64(wb.WalletBalance.UnconfirmedBalance),
 		w.StringID, w.PublicKey,
 	)
 	ch <- prometheus.MustNewConstMetric(
-		spendableBalanceDesc,
+		spendableBalanceDesc(cc.name),
 		prometheus.GaugeValue,
 		float64(wb.WalletBalance.SpendableBalance),
 		w.StringID, w.PublicKey,
 	)
 	ch <- prometheus.MustNewConstMetric(
-		maxSendDesc,
+		maxSendDesc(cc.name),
 		prometheus.GaugeValue,
 		float64(wb.WalletBalance.MaxSendAmount),
 		w.StringID, w.PublicKey,
 	)
 	ch <- prometheus.MustNewConstMetric(
-		pendingChangeDesc,
+		pendingChangeDesc(cc.name),
 		prometheus.GaugeValue,
 		float64(wb.WalletBalance.PendingChange),
 		w.StringID, w.PublicKey,
@@ -336,19 +452,23 @@ func (cc ChiaCollector) collectWalletBalance(ch chan<- prometheus.Metric, w Wall
 }
 
 var (
-	walletSyncStatusDesc = prometheus.NewDesc(
-		"chia_wallet_sync_status",
-		"Sync status, 0=not synced, 1=syncing, 2=synced",
-		[]string{"wallet_id", "wallet_fingerprint"}, nil,
-	)
-	walletHeightDesc = prometheus.NewDesc(
-		"chia_wallet_height",
-		"Wallet synced height.",
-		[]string{"wallet_id", "wallet_fingerprint"}, nil,
-	)
+	walletSyncStatusDesc = func(name string) *prometheus.Desc {
+		return prometheus.NewDesc(
+			fmt.Sprintf("%s_wallet_sync_status", name),
+			"Sync status, 0=not synced, 1=syncing, 2=synced",
+			[]string{"wallet_id", "wallet_fingerprint"}, nil,
+		)
+	}
+	walletHeightDesc = func(name string) *prometheus.Desc {
+		return prometheus.NewDesc(
+			fmt.Sprintf("%s_wallet_height", name),
+			"Wallet synced height.",
+			[]string{"wallet_id", "wallet_fingerprint"}, nil,
+		)
+	}
 )
 
-func (cc ChiaCollector) collectWalletSync(ch chan<- prometheus.Metric, w Wallet) {
+func (cc Collector) collectWalletSync(ch chan<- prometheus.Metric, w Wallet) {
 	var wss WalletSyncStatus
 	q := fmt.Sprintf(`{"wallet_id":%d}`, w.ID)
 	if err := queryAPI(cc.client, cc.walletURL, "get_sync_status", q, &wss); err != nil {
@@ -362,7 +482,7 @@ func (cc ChiaCollector) collectWalletSync(ch chan<- prometheus.Metric, w Wallet)
 		sync = 2.0
 	}
 	ch <- prometheus.MustNewConstMetric(
-		walletSyncStatusDesc,
+		walletSyncStatusDesc(cc.name),
 		prometheus.GaugeValue,
 		sync,
 		w.StringID, w.PublicKey,
@@ -374,14 +494,18 @@ func (cc ChiaCollector) collectWalletSync(ch chan<- prometheus.Metric, w Wallet)
 		return
 	}
 	ch <- prometheus.MustNewConstMetric(
-		walletHeightDesc,
+		walletHeightDesc(cc.name),
 		prometheus.GaugeValue,
 		float64(whi.Height),
 		w.StringID, w.PublicKey,
 	)
 }
 
-func (cc ChiaCollector) collectPoolState(ch chan<- prometheus.Metric) {
+func (cc Collector) collectPoolState(ch chan<- prometheus.Metric) {
+	if !cc.pullSwitcher[IsPool] {
+		return
+	}
+
 	var pools PoolState
 	if err := queryAPI(cc.client, cc.farmerURL, "get_pool_state", "", &pools); err != nil {
 		log.Print(err)
@@ -390,7 +514,7 @@ func (cc ChiaCollector) collectPoolState(ch chan<- prometheus.Metric) {
 	for _, p := range pools.PoolState {
 		ch <- prometheus.MustNewConstMetric(
 			prometheus.NewDesc(
-				"chia_pool_current_difficulty",
+				fmt.Sprintf("%s_pool_current_difficulty", cc.name),
 				"Current difficulty on pool.",
 				[]string{"launcher_id", "pool_url"}, nil,
 			),
@@ -401,7 +525,7 @@ func (cc ChiaCollector) collectPoolState(ch chan<- prometheus.Metric) {
 		)
 		ch <- prometheus.MustNewConstMetric(
 			prometheus.NewDesc(
-				"chia_pool_current_points",
+				fmt.Sprintf("%s_pool_current_points", cc.name),
 				"Current points on pool.",
 				[]string{"launcher_id", "pool_url"}, nil,
 			),
@@ -412,7 +536,7 @@ func (cc ChiaCollector) collectPoolState(ch chan<- prometheus.Metric) {
 		)
 		ch <- prometheus.MustNewConstMetric(
 			prometheus.NewDesc(
-				"chia_pool_points_acknowledged_24h",
+				fmt.Sprintf("%s_pool_points_acknowledged_24h", cc.name),
 				"Points acknowledged last 24h on pool.",
 				[]string{"launcher_id", "pool_url"}, nil,
 			),
@@ -423,7 +547,7 @@ func (cc ChiaCollector) collectPoolState(ch chan<- prometheus.Metric) {
 		)
 		ch <- prometheus.MustNewConstMetric(
 			prometheus.NewDesc(
-				"chia_pool_points_found_24h",
+				fmt.Sprintf("%s_pool_points_found_24h", cc.name),
 				"Points found last 24h on pool.",
 				[]string{"launcher_id", "pool_url"}, nil,
 			),
@@ -435,7 +559,11 @@ func (cc ChiaCollector) collectPoolState(ch chan<- prometheus.Metric) {
 	}
 }
 
-func (cc ChiaCollector) collectPlots(ch chan<- prometheus.Metric) {
+func (cc Collector) collectPlots(ch chan<- prometheus.Metric) {
+	if !cc.pullSwitcher[IsPlots] {
+		return
+	}
+
 	var plots PlotFiles
 	if err := queryAPI(cc.client, cc.harvesterURL, "get_plots", "", &plots); err != nil {
 		log.Print(err)
@@ -443,7 +571,7 @@ func (cc ChiaCollector) collectPlots(ch chan<- prometheus.Metric) {
 	}
 	ch <- prometheus.MustNewConstMetric(
 		prometheus.NewDesc(
-			"chia_plots_failed_to_open",
+			fmt.Sprintf("%s_plots_failed_to_open", cc.name),
 			"Number of plots files failed to open.",
 			nil, nil,
 		),
@@ -452,7 +580,7 @@ func (cc ChiaCollector) collectPlots(ch chan<- prometheus.Metric) {
 	)
 	ch <- prometheus.MustNewConstMetric(
 		prometheus.NewDesc(
-			"chia_plots_not_found",
+			fmt.Sprintf("%s_plots_not_found", cc.name),
 			"Number of plots files not found.",
 			nil, nil,
 		),
@@ -461,7 +589,7 @@ func (cc ChiaCollector) collectPlots(ch chan<- prometheus.Metric) {
 	)
 	ch <- prometheus.MustNewConstMetric(
 		prometheus.NewDesc(
-			"chia_plots",
+			fmt.Sprintf("%s_plots", cc.name),
 			"Number of plots currently using.",
 			nil, nil,
 		),
@@ -470,7 +598,7 @@ func (cc ChiaCollector) collectPlots(ch chan<- prometheus.Metric) {
 	)
 }
 
-func (cc ChiaCollector) collectFarmedAmount(ch chan<- prometheus.Metric, w Wallet) {
+func (cc Collector) collectFarmedAmount(ch chan<- prometheus.Metric, w Wallet) {
 	var farmed FarmedAmount
 	q := fmt.Sprintf(`{"wallet_id":%d}`, w.ID)
 	if err := queryAPI(cc.client, cc.walletURL, "get_farmed_amount", q, &farmed); err != nil {
@@ -479,7 +607,7 @@ func (cc ChiaCollector) collectFarmedAmount(ch chan<- prometheus.Metric, w Walle
 	}
 	ch <- prometheus.MustNewConstMetric(
 		prometheus.NewDesc(
-			"chia_wallet_farmed_amount",
+			fmt.Sprintf("%s_wallet_farmed_amount", cc.name),
 			"Farmed amount",
 			[]string{"wallet_id", "wallet_fingerprint"}, nil,
 		),
@@ -489,7 +617,7 @@ func (cc ChiaCollector) collectFarmedAmount(ch chan<- prometheus.Metric, w Walle
 	)
 	ch <- prometheus.MustNewConstMetric(
 		prometheus.NewDesc(
-			"chia_wallet_reward_amount",
+			fmt.Sprintf("%s_wallet_reward_amount", cc.name),
 			"Reward amount",
 			[]string{"wallet_id", "wallet_fingerprint"}, nil,
 		),
@@ -499,7 +627,7 @@ func (cc ChiaCollector) collectFarmedAmount(ch chan<- prometheus.Metric, w Walle
 	)
 	ch <- prometheus.MustNewConstMetric(
 		prometheus.NewDesc(
-			"chia_wallet_fee_amount",
+			fmt.Sprintf("%s_wallet_fee_amount", cc.name),
 			"Fee amount amount",
 			[]string{"wallet_id", "wallet_fingerprint"}, nil,
 		),
@@ -509,7 +637,7 @@ func (cc ChiaCollector) collectFarmedAmount(ch chan<- prometheus.Metric, w Walle
 	)
 	ch <- prometheus.MustNewConstMetric(
 		prometheus.NewDesc(
-			"chia_wallet_last_height_farmed",
+			fmt.Sprintf("%s_wallet_last_height_farmed", cc.name),
 			"Last height farmed",
 			[]string{"wallet_id", "wallet_fingerprint"}, nil,
 		),
@@ -519,7 +647,7 @@ func (cc ChiaCollector) collectFarmedAmount(ch chan<- prometheus.Metric, w Walle
 	)
 	ch <- prometheus.MustNewConstMetric(
 		prometheus.NewDesc(
-			"chia_wallet_pool_reward_amount",
+			fmt.Sprintf("%s_wallet_pool_reward_amount", cc.name),
 			"Pool Reward amount",
 			[]string{"wallet_id", "wallet_fingerprint"}, nil,
 		),

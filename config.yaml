@@ -1,0 +1,36 @@
+---
+port: 9134
+coins:
+  chia:
+    cert: "$HOME/.chia/mainnet/config/ssl/full_node/private_full_node.crt"
+    key: "$HOME/.chia/mainnet/config/ssl/full_node/private_full_node.key"
+    host: "https://localhost"
+    full-node-port: 8555
+    wallet-port: 9256
+    farmer-port: 8559
+    harvester-port: 8560
+    pull-switcher:
+      conn: true
+      state: true
+      wallet-balance: true
+      wallet-sync: true
+      farmed-amount: true
+      pool: true
+      plots: true
+  
+  flax:
+    cert: "$HOME/.flax/mainnet/config/ssl/full_node/private_full_node.crt"
+    key: "$HOME/.flax/mainnet/config/ssl/full_node/private_full_node.key"
+    host: "https://localhost"
+    full-node-port: 6755
+    wallet-port: 6761
+    farmer-port: 6759
+    harvester-port: 6760
+    pull-switcher:
+      conn: true
+      state: true
+      wallet-balance: true
+      wallet-sync: true
+      farmed-amount: false
+      pool: false
+      plots: true
