@@ -34,3 +34,88 @@ coins:
       farmed-amount: false
       pool: false
       plots: true
+
+  flora:
+    cert: "$HOME/.flora/mainnet/config/ssl/full_node/private_full_node.crt"
+    key: "$HOME/.flora/mainnet/config/ssl/full_node/private_full_node.key"
+    host: "https://localhost"
+    full-node-port: 18755
+    wallet-port: 19456
+    farmer-port: 18759
+    harvester-port: 18760
+    pull-switcher:
+      conn: true
+      state: true
+      wallet-balance: true
+      wallet-sync: true
+      farmed-amount: false
+      pool: false
+      plots: true
+
+  chives:
+    cert: "$HOME/.chives/mainnet/config/ssl/full_node/private_full_node.crt"
+    key: "$HOME/.chives/mainnet/config/ssl/full_node/private_full_node.key"
+    host: "https://localhost"
+    full-node-port: 9755
+    wallet-port: 9856
+    farmer-port: 9759
+    harvester-port: 9760
+    pull-switcher:
+      conn: true
+      state: true
+      wallet-balance: true
+      wallet-sync: true
+      farmed-amount: false
+      pool: false
+      plots: true
+
+  chaingreen:
+    cert: "$HOME/.chaingreen/mainnet/config/ssl/full_node/private_full_node.crt"
+    key: "$HOME/.chaingreen/mainnet/config/ssl/full_node/private_full_node.key"
+    host: "https://localhost"
+    full-node-port: 8855
+    wallet-port: 9556
+    farmer-port: 8859
+    harvester-port: 8860
+    pull-switcher:
+      conn: true
+      state: true
+      wallet-balance: true
+      wallet-sync: true
+      farmed-amount: false
+      pool: false
+      plots: true
+
+  spare:
+    cert: "$HOME/.spare-blockchain/mainnet/config/ssl/full_node/private_full_node.crt"
+    key: "$HOME/.spare-blockchain/mainnet/config/ssl/full_node/private_full_node.key"
+    host: "https://localhost"
+    full-node-port: 9555
+    wallet-port: 7256
+    farmer-port: 9559
+    harvester-port: 9560
+    pull-switcher:
+      conn: true
+      state: true
+      wallet-balance: true
+      wallet-sync: true
+      farmed-amount: false
+      pool: false
+      plots: true
+
+  silicoin:
+    cert: "$HOME/.silicoin/mainnet/config/ssl/full_node/private_full_node.crt"
+    key: "$HOME/.silicoin/mainnet/config/ssl/full_node/private_full_node.key"
+    host: "https://localhost"
+    full-node-port: 10555
+    wallet-port: 10256
+    farmer-port: 10559
+    harvester-port: 10560
+    pull-switcher:
+      conn: true
+      state: true
+      wallet-balance: true
+      wallet-sync: true
+      farmed-amount: false
+      pool: false
+      plots: true
