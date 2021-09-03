@@ -245,7 +245,7 @@ func (cc Collector) collectConnections(ch chan<- prometheus.Metric) {
 
 	var conns Connections
 	if err := queryAPI(cc.client, cc.baseURL, "get_connections", "", &conns); err != nil {
-		log.Print(err)
+		log.Print(cc.name, err)
 		return
 	}
 	peers := make([]int, NumNodeTypes)
@@ -274,7 +274,7 @@ func (cc Collector) collectBlockchainState(ch chan<- prometheus.Metric) {
 
 	var bs BlockchainState
 	if err := queryAPI(cc.client, cc.baseURL, "get_blockchain_state", "", &bs); err != nil {
-		log.Print(err)
+		log.Print(cc.name, err)
 		return
 	}
 	sync := 0.0
@@ -337,7 +337,7 @@ func (cc Collector) collectWallets(ch chan<- prometheus.Metric) {
 
 	var ws Wallets
 	if err := queryAPI(cc.client, cc.walletURL, "get_wallets", "", &ws); err != nil {
-		log.Print(err)
+		log.Print(cc.name, err)
 		return
 	}
 	for _, w := range ws.Wallets {
@@ -361,7 +361,7 @@ func (cc Collector) getWalletPublicKey(w Wallet) string {
 	var wpks WalletPublicKeys
 	q := fmt.Sprintf(`{"wallet_id":%d}`, w.ID)
 	if err := queryAPI(cc.client, cc.walletURL, "get_public_keys", q, &wpks); err != nil {
-		log.Print(err)
+		log.Print(cc.name, err)
 		return ""
 	}
 	if len(wpks.PublicKeyFingerprints) < 1 {
@@ -416,7 +416,7 @@ func (cc Collector) collectWalletBalance(ch chan<- prometheus.Metric, w Wallet) 
 	var wb WalletBalance
 	q := fmt.Sprintf(`{"wallet_id":%d}`, w.ID)
 	if err := queryAPI(cc.client, cc.walletURL, "get_wallet_balance", q, &wb); err != nil {
-		log.Print(err)
+		log.Print(cc.name, err)
 		return
 	}
 	ch <- prometheus.MustNewConstMetric(
@@ -472,7 +472,7 @@ func (cc Collector) collectWalletSync(ch chan<- prometheus.Metric, w Wallet) {
 	var wss WalletSyncStatus
 	q := fmt.Sprintf(`{"wallet_id":%d}`, w.ID)
 	if err := queryAPI(cc.client, cc.walletURL, "get_sync_status", q, &wss); err != nil {
-		log.Print(err)
+		log.Print(cc.name, err)
 		return
 	}
 	sync := 0.0
@@ -490,7 +490,7 @@ func (cc Collector) collectWalletSync(ch chan<- prometheus.Metric, w Wallet) {
 
 	var whi WalletHeightInfo
 	if err := queryAPI(cc.client, cc.walletURL, "get_height_info", q, &whi); err != nil {
-		log.Print(err)
+		log.Print(cc.name, err)
 		return
 	}
 	ch <- prometheus.MustNewConstMetric(
@@ -508,7 +508,7 @@ func (cc Collector) collectPoolState(ch chan<- prometheus.Metric) {
 
 	var pools PoolState
 	if err := queryAPI(cc.client, cc.farmerURL, "get_pool_state", "", &pools); err != nil {
-		log.Print(err)
+		log.Print(cc.name, err)
 		return
 	}
 	for _, p := range pools.PoolState {
@@ -566,7 +566,7 @@ func (cc Collector) collectPlots(ch chan<- prometheus.Metric) {
 
 	var plots PlotFiles
 	if err := queryAPI(cc.client, cc.harvesterURL, "get_plots", "", &plots); err != nil {
-		log.Print(err)
+		log.Print(cc.name, err)
 		return
 	}
 	ch <- prometheus.MustNewConstMetric(
@@ -602,7 +602,7 @@ func (cc Collector) collectFarmedAmount(ch chan<- prometheus.Metric, w Wallet) {
 	var farmed FarmedAmount
 	q := fmt.Sprintf(`{"wallet_id":%d}`, w.ID)
 	if err := queryAPI(cc.client, cc.walletURL, "get_farmed_amount", q, &farmed); err != nil {
-		log.Print(err)
+		log.Print(cc.name, err)
 		return
 	}
 	ch <- prometheus.MustNewConstMetric(
