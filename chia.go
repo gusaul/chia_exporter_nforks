@@ -40,7 +40,7 @@ type BlockchainState struct {
 			SubSlotIters               int         `json:"sub_slot_iters"`
 			Timestamp                  interface{}
 			TotalIters                 int `json:"total_iters"`
-			Weight                     int
+			// Weight                     int
 		}
 		Space        float64
 		SubSlotIters int `json:"sub_slot_iters"`
@@ -78,11 +78,11 @@ type Connections struct {
 		NodeId          string  `json:"node_id"`
 		PeakHash        string  `json:"peak_hash"`
 		PeakHeight      int     `json:"peak_height"`
-		PeakWeight      int     `json:"peak_weight"`
-		PeerHost        string  `json:"peer_host"`
-		PeerPort        int     `json:"peer_port"`
-		PeerServerPort  int     `json:"peer_server_port"`
-		Type            NodeType
+		// PeakWeight      int     `json:"peak_weight"`
+		PeerHost       string `json:"peer_host"`
+		PeerPort       int    `json:"peer_port"`
+		PeerServerPort int    `json:"peer_server_port"`
+		Type           NodeType
 	}
 	Success bool
 }
