@@ -113,7 +113,7 @@ func main() {
 		if err := queryAPI(client, coll.baseURL, "get_network_info", "", &info); err != nil {
 			log.Print(name, err)
 		} else {
-			log.Printf(name, "Connected to node at %s on %s", coll.baseURL, info.NetworkName)
+			log.Printf("[%s] Connected to node at %s on %s", name, coll.baseURL, info.NetworkName)
 		}
 
 		coll.client = client
